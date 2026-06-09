@@ -1,0 +1,59 @@
+# Reliable source registry for stock analysis.
+# Update this file when adding paid APIs, local datasets, or official filings.
+
+market_data:
+  - name: Exchange official data
+    type: primary
+    use_cases:
+      - listings
+      - trading calendars
+      - corporate actions
+    freshness_required: trading_day
+    notes: Prefer exchange announcements for listing status and corporate actions.
+  - name: SEC EDGAR
+    type: primary
+    markets:
+      - US
+    use_cases:
+      - annual_reports
+      - quarterly_reports
+      - insider_transactions
+    freshness_required: filing_timestamp
+    url: https://www.sec.gov/edgar
+  - name: Company investor relations
+    type: primary
+    use_cases:
+      - earnings_releases
+      - presentations
+      - guidance
+    freshness_required: publication_timestamp
+
+secondary_data:
+  - name: Finnhub
+    type: api
+    env_key: FINNHUB_API_KEY
+    use_cases:
+      - quotes
+      - fundamentals
+      - news
+  - name: Alpha Vantage
+    type: api
+    env_key: ALPHA_VANTAGE_API_KEY
+    use_cases:
+      - time_series
+      - technical_indicators
+      - fundamentals
+  - name: Financial Modeling Prep
+    type: api
+    env_key: FMP_API_KEY
+    use_cases:
+      - financial_statements
+      - ratios
+      - estimates
+
+source_rules:
+  - Key figures must include source name, report period or trading date, and retrieval date.
+  - News and ratings must include publication timestamp.
+  - Rumors or unsourced social media claims must not be used as factual evidence.
+  - When sources disagree, preserve the discrepancy and explain which source is treated as primary.
+

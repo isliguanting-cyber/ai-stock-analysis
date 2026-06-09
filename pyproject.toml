@@ -1,0 +1,11 @@
+[project]
+name = "ai-stock-analysis"
+version = "0.1.0"
+description = "Research workspace for AI-assisted stock analysis."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
