@@ -22,10 +22,15 @@ class AnalyzeResponse(BaseModel):
 
 app = FastAPI(title="AI Stock Analysis API", version="0.1.0")
 
-frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+frontend_origins = [
+    origin.strip()
+    for origin in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_origin],
+    allow_origins=frontend_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -61,4 +66,3 @@ def analyze(payload: AnalyzeRequest):
         ],
         disclaimer="仅供研究和信息参考，不构成投资建议。",
     )
-
