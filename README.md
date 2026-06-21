@@ -59,6 +59,8 @@ npm run dev
 
 本地访问 `http://localhost:5173`，前端默认调用 `http://localhost:8000`。
 
+后端的公开响应通过 `apps/backend/analysis_adapter.py` 统一生成。后续接入真实数据源时，优先把 MCP、yfinance、OpenBB 或付费 API 的原始结果转换到 adapter 输入结构，再由 adapter 输出给前端，避免在公开页面暴露买卖指令式措辞。
+
 ## 部署
 
 - 后端部署到 Render：Root Directory 选择 `apps/backend`，Build Command 使用 `pip install -r requirements.txt`，Start Command 使用 `uvicorn main:app --host 0.0.0.0 --port $PORT`。

@@ -51,7 +51,7 @@ function App() {
         <div className="header">
           <p className="eyebrow">AI Stock Analysis</p>
           <h1>股票分析工作台</h1>
-          <p className="subtitle">第一版用于跑通前端、后端和部署链路，当前返回示例分析结果。</p>
+          <p className="subtitle">输入股票代码，生成带数据日期、关键依据和风险提示的研究快照。</p>
         </div>
 
         <form className="search" onSubmit={handleSubmit}>
@@ -108,7 +108,7 @@ function App() {
           </section>
         ) : (
           <section className="empty">
-            输入股票代码后生成第一版分析结果。
+            输入股票代码后生成研究快照。
           </section>
         )}
       </section>
@@ -121,4 +121,3 @@ createRoot(document.getElementById("root")!).render(
     <App />
   </React.StrictMode>
 );
-
