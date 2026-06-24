@@ -35,6 +35,7 @@ def _fetch_from_yfinance(symbol: str) -> dict[str, dict[str, Any]] | None:
     normalized = symbol.strip().upper()
     try:
         ticker = yf.Ticker(normalized)
+        fast_info, fast_info_warning = _safe_fast_info(ticker)
         info, info_warning = _safe_info(ticker)
         history, history_warning = _safe_history(ticker)
     except Exception as exc:
@@ -45,18 +46,25 @@ def _fetch_from_yfinance(symbol: str) -> dict[str, dict[str, Any]] | None:
         return _fetch_from_yahoo_chart(normalized)
 
     as_of = datetime.utcnow().isoformat() + "Z"
-    warnings = [warning for warning in (info_warning, history_warning) if warning]
+    profile, profile_warning = _fetch_search_profile(normalized)
+    warnings = [
+        warning
+        for warning in (fast_info_warning, info_warning, history_warning, profile_warning)
+        if warning
+    ]
     current_price = _first_number(
         info.get("currentPrice"),
         info.get("regularMarketPrice"),
         info.get("previousClose"),
+        fast_info.get("last_price"),
         _last_close(history),
     )
+    merged_info = _merge_info(normalized, info, fast_info, profile, current_price)
 
     return {
-        "summary": _build_summary(normalized, info, current_price, as_of, warnings),
+        "summary": _build_summary(normalized, merged_info, current_price, as_of, warnings),
         "technicals": _build_technicals(normalized, history, current_price, as_of, pd, warnings),
-        "fundamentals": _build_fundamentals(normalized, info, as_of, warnings),
+        "fundamentals": _build_fundamentals(normalized, merged_info, as_of, warnings),
     }
 
 
@@ -85,6 +93,7 @@ def _fetch_from_yahoo_chart(symbol: str) -> dict[str, dict[str, Any]] | None:
         return None
 
     meta = result.get("meta") or {}
+    profile, profile_warning = _fetch_search_profile(symbol)
     timestamps = result.get("timestamp") or []
     quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
     history = pd.DataFrame(
@@ -96,11 +105,17 @@ def _fetch_from_yahoo_chart(symbol: str) -> dict[str, dict[str, Any]] | None:
     ).dropna(subset=["Close"])
 
     as_of = datetime.utcnow().isoformat() + "Z"
-    warnings = ["fundamentals_unavailable", "yfinance_fallback_chart"]
+    warnings = [
+        warning
+        for warning in ("fundamentals_unavailable", "yfinance_fallback_chart", profile_warning)
+        if warning
+    ]
     current_price = _first_number(meta.get("regularMarketPrice"), _last_close(history))
     info = {
-        "longName": meta.get("longName") or symbol,
-        "shortName": meta.get("shortName") or symbol,
+        "longName": profile.get("longName") or meta.get("longName") or symbol,
+        "shortName": profile.get("shortName") or meta.get("shortName") or symbol,
+        "sector": profile.get("sector"),
+        "industry": profile.get("industry"),
         "currency": meta.get("currency"),
         "exchange": meta.get("exchangeName"),
         "currentPrice": current_price,
@@ -133,6 +148,19 @@ def _fetch_from_yahoo_chart(symbol: str) -> dict[str, dict[str, Any]] | None:
             source="yahoo_finance_chart",
         ),
     }
+
+
+def _safe_fast_info(ticker: Any) -> tuple[dict[str, Any], str | None]:
+    try:
+        timeout = float(os.getenv("YFINANCE_FAST_INFO_TIMEOUT_SECONDS", "5"))
+        raw = _run_with_timeout(lambda: dict(ticker.fast_info or {}), timeout)
+        return raw, None
+    except TimeoutError:
+        logger.warning("yfinance fast_info fetch timed out")
+        return {}, "fast_info_timeout"
+    except Exception as exc:
+        logger.warning("yfinance fast_info fetch failed: %s", exc)
+        return {}, "fast_info_unavailable"
 
 
 def _safe_info(ticker: Any) -> tuple[dict[str, Any], str | None]:
@@ -170,6 +198,73 @@ def _safe_history(ticker: Any) -> tuple[Any, str | None]:
             return pd.DataFrame(), "history_unavailable"
         except ImportError:
             raise exc
+
+
+def _fetch_search_profile(symbol: str) -> tuple[dict[str, Any], str | None]:
+    try:
+        import requests
+    except ImportError:
+        return {}, "search_profile_unavailable"
+
+    try:
+        response = requests.get(
+            "https://query1.finance.yahoo.com/v1/finance/search",
+            params={"q": symbol, "quotesCount": 1, "newsCount": 0},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=6,
+        )
+        response.raise_for_status()
+        quotes = response.json().get("quotes") or []
+        match = next((quote for quote in quotes if quote.get("symbol") == symbol), quotes[0] if quotes else {})
+        return {
+            "longName": match.get("longname") or match.get("shortname"),
+            "shortName": match.get("shortname") or match.get("longname"),
+            "sector": match.get("sectorDisp") or match.get("sector"),
+            "industry": match.get("industryDisp") or match.get("industry"),
+            "exchange": match.get("exchange"),
+        }, None
+    except Exception as exc:
+        logger.warning("Yahoo search profile failed for %s: %s", symbol, exc)
+        return {}, "search_profile_unavailable"
+
+
+def _merge_info(
+    symbol: str,
+    info: dict[str, Any],
+    fast_info: dict[str, Any],
+    profile: dict[str, Any],
+    current_price: float | None,
+) -> dict[str, Any]:
+    merged = dict(info)
+    for source in (profile, fast_info):
+        for key, value in source.items():
+            if merged.get(key) in (None, "") and value not in (None, ""):
+                merged[key] = value
+
+    shares = _first_number(
+        merged.get("sharesOutstanding"),
+        fast_info.get("shares"),
+        fast_info.get("shares_outstanding"),
+    )
+    if merged.get("currency") is None and fast_info.get("currency"):
+        merged["currency"] = fast_info.get("currency")
+    if merged.get("currentPrice") is None:
+        merged["currentPrice"] = _first_number(fast_info.get("last_price"), current_price)
+    if merged.get("previousClose") is None:
+        merged["previousClose"] = _first_number(fast_info.get("previous_close"))
+    if merged.get("marketCap") is None:
+        merged["marketCap"] = _first_number(fast_info.get("market_cap"))
+    if merged.get("averageVolume") is None:
+        merged["averageVolume"] = _first_number(
+            fast_info.get("three_month_average_volume"),
+            fast_info.get("ten_day_average_volume"),
+        )
+    if shares is not None and merged.get("sharesOutstanding") is None:
+        merged["sharesOutstanding"] = shares
+    if merged.get("marketCap") is None and shares is not None and current_price is not None:
+        merged["marketCap"] = shares * current_price
+    merged.setdefault("symbol", symbol)
+    return merged
 
 
 def _run_with_timeout(fetcher: Any, timeout_seconds: float) -> Any:
