@@ -14,9 +14,11 @@ def fetch_stock_payloads(symbol: str) -> dict[str, dict[str, Any]] | None:
     Returns None when real data is disabled or temporarily unavailable. The API
     layer can then fall back to the compliant demo response.
     """
-    provider = os.getenv("STOCK_DATA_PROVIDER", "yfinance").strip().lower()
+    provider = os.getenv("STOCK_DATA_PROVIDER", "chart").strip().lower()
     if provider in {"", "demo", "mock", "off"}:
         return None
+    if provider in {"chart", "yahoo", "yahoo_chart"}:
+        return _fetch_from_yahoo_chart(symbol.strip().upper())
     if provider != "yfinance":
         raise ValueError(f"Unsupported STOCK_DATA_PROVIDER: {provider}")
     return _fetch_from_yfinance(symbol)

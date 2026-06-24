@@ -12,6 +12,7 @@ type Analysis = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const REQUEST_TIMEOUT_MS = 20000;
 
 function App() {
   const [symbol, setSymbol] = useState("AAPL");
@@ -24,9 +25,13 @@ function App() {
     setError("");
     setLoading(true);
 
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json"
         },
@@ -39,8 +44,13 @@ function App() {
 
       setAnalysis(await response.json());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "请求失败，请稍后重试。");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setError("请求超时，请稍后重试。Render 免费实例冷启动或数据源波动时可能需要更久。");
+      } else {
+        setError(err instanceof Error ? err.message : "请求失败，请稍后重试。");
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setLoading(false);
     }
   }

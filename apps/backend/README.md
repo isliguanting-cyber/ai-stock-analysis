@@ -18,11 +18,12 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 ## Data Provider
 
-默认使用 `yfinance` 拉取基础行情、历史价格、估值、增长、盈利能力和现金流字段，再通过 `analysis_adapter.py` 输出合规响应。
+默认使用 Yahoo chart 快速接口拉取基础行情和历史价格，再通过 `analysis_adapter.py` 输出合规响应。这样可以避免部分环境中 `yfinance` 基本面接口响应过慢导致前端长时间等待。
 
 可通过环境变量切换：
 
 ```bash
+STOCK_DATA_PROVIDER=chart
 STOCK_DATA_PROVIDER=yfinance
 STOCK_DATA_PROVIDER=demo
 ```
