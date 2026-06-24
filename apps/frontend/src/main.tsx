@@ -20,6 +20,7 @@ type Analysis = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const REQUEST_TIMEOUT_MS = 60000;
+const QUICK_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL"];
 
 function App() {
   const [symbol, setSymbol] = useState("AAPL");
@@ -27,12 +28,12 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function requestAnalysis(nextSymbol = symbol) {
     setError("");
     setLoading(true);
 
     const controller = new AbortController();
+    const normalizedSymbol = nextSymbol.trim().toUpperCase();
     const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
@@ -42,7 +43,7 @@ function App() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ symbol })
+        body: JSON.stringify({ symbol: normalizedSymbol })
       });
 
       if (!response.ok) {
@@ -62,35 +63,80 @@ function App() {
     }
   }
 
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await requestAnalysis();
+  }
+
+  async function handleQuickSymbol(nextSymbol: string) {
+    setSymbol(nextSymbol);
+    await requestAnalysis(nextSymbol);
+  }
+
   return (
     <main className="page">
       <section className="workspace">
-        <div className="header">
-          <p className="eyebrow">AI Stock Analysis</p>
-          <h1>股票分析工作台</h1>
-          <p className="subtitle">输入股票代码，生成带数据日期、关键依据和风险提示的研究快照。</p>
-        </div>
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">AI Stock Analysis</p>
+            <h1>股票研究工作台</h1>
+          </div>
+          <div className="statusPill">Research only</div>
+        </header>
 
-        <form className="search" onSubmit={handleSubmit}>
-          <label htmlFor="symbol">股票代码</label>
-          <div className="searchRow">
-            <input
-              id="symbol"
-              value={symbol}
-              onChange={(event) => setSymbol(event.target.value)}
-              placeholder="例如 AAPL"
-              autoComplete="off"
-            />
-            <button type="submit" disabled={loading || !symbol.trim()}>
-              {loading ? "生成中..." : "生成分析"}
-            </button>
+        <form className="commandBar" onSubmit={handleSubmit}>
+          <div className="field">
+            <label htmlFor="symbol">股票代码</label>
+            <div className="searchRow">
+              <input
+                id="symbol"
+                value={symbol}
+                onChange={(event) => setSymbol(event.target.value.toUpperCase())}
+                placeholder="AAPL"
+                autoComplete="off"
+              />
+              <button type="submit" disabled={loading || !symbol.trim()}>
+                {loading ? "分析中" : "生成"}
+              </button>
+            </div>
+          </div>
+
+          <div className="quickSymbols" aria-label="快捷股票代码">
+            {QUICK_SYMBOLS.map((quickSymbol) => (
+              <button
+                className={symbol === quickSymbol ? "active" : ""}
+                disabled={loading}
+                key={quickSymbol}
+                onClick={() => handleQuickSymbol(quickSymbol)}
+                type="button"
+              >
+                {quickSymbol}
+              </button>
+            ))}
           </div>
         </form>
 
-        {error ? <p className="error">{error}</p> : null}
+        {error ? <p className="alert">{error}</p> : null}
 
-        {analysis ? (
-          <section className="result" aria-label="分析结果">
+        {loading ? (
+          <section className="panel skeletonPanel" aria-label="加载中">
+            <div className="skeletonHeader">
+              <span />
+              <span />
+            </div>
+            <div className="skeletonLine wide" />
+            <div className="skeletonLine" />
+            <div className="skeletonGrid">
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+          </section>
+        ) : null}
+
+        {analysis && !loading ? (
+          <section className="panel result" aria-label="分析结果">
             <div className="resultHeader">
               <div>
                 <p className="eyebrow">Result</p>
@@ -141,11 +187,15 @@ function App() {
 
             <p className="disclaimer">{analysis.disclaimer}</p>
           </section>
-        ) : (
-          <section className="empty">
-            输入股票代码后生成研究快照。
+        ) : !loading ? (
+          <section className="panel empty" aria-label="暂无分析结果">
+            <div>
+              <p className="eyebrow">Ready</p>
+              <h2>暂无研究快照</h2>
+            </div>
+            <p>选择一个股票代码开始。</p>
           </section>
-        )}
+        ) : null}
       </section>
     </main>
   );
