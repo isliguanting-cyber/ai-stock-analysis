@@ -20,6 +20,7 @@ class AnalyzeResponse(BaseModel):
     key_points: List[str]
     risks: List[str]
     disclaimer: str
+    sections: List[dict[str, object]] = Field(default_factory=list)
 
 
 app = FastAPI(title="AI Stock Analysis API", version="0.1.0")

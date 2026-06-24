@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import datetime
 import logging
 import os
@@ -14,7 +15,7 @@ def fetch_stock_payloads(symbol: str) -> dict[str, dict[str, Any]] | None:
     Returns None when real data is disabled or temporarily unavailable. The API
     layer can then fall back to the compliant demo response.
     """
-    provider = os.getenv("STOCK_DATA_PROVIDER", "chart").strip().lower()
+    provider = os.getenv("STOCK_DATA_PROVIDER", "yfinance").strip().lower()
     if provider in {"", "demo", "mock", "off"}:
         return None
     if provider in {"chart", "yahoo", "yahoo_chart"}:
@@ -136,7 +137,11 @@ def _fetch_from_yahoo_chart(symbol: str) -> dict[str, dict[str, Any]] | None:
 
 def _safe_info(ticker: Any) -> tuple[dict[str, Any], str | None]:
     try:
-        return ticker.info or {}, None
+        timeout = float(os.getenv("YFINANCE_INFO_TIMEOUT_SECONDS", "25"))
+        return _run_with_timeout(lambda: ticker.info or {}, timeout), None
+    except TimeoutError:
+        logger.warning("yfinance info fetch timed out")
+        return {}, "info_timeout"
     except Exception as exc:
         logger.warning("yfinance info fetch failed: %s", exc)
         return {}, "info_unavailable"
@@ -144,7 +149,19 @@ def _safe_info(ticker: Any) -> tuple[dict[str, Any], str | None]:
 
 def _safe_history(ticker: Any) -> tuple[Any, str | None]:
     try:
-        return ticker.history(period="1y", interval="1d", auto_adjust=True), None
+        timeout = float(os.getenv("YFINANCE_HISTORY_TIMEOUT_SECONDS", "12"))
+        return _run_with_timeout(
+            lambda: ticker.history(period="1y", interval="1d", auto_adjust=True),
+            timeout,
+        ), None
+    except TimeoutError:
+        logger.warning("yfinance history fetch timed out")
+        try:
+            import pandas as pd
+
+            return pd.DataFrame(), "history_timeout"
+        except ImportError:
+            raise
     except Exception as exc:
         logger.warning("yfinance history fetch failed: %s", exc)
         try:
@@ -153,6 +170,15 @@ def _safe_history(ticker: Any) -> tuple[Any, str | None]:
             return pd.DataFrame(), "history_unavailable"
         except ImportError:
             raise exc
+
+
+def _run_with_timeout(fetcher: Any, timeout_seconds: float) -> Any:
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(fetcher)
+        return future.result(timeout=timeout_seconds)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _build_summary(

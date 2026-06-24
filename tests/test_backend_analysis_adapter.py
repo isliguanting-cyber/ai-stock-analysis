@@ -36,6 +36,8 @@ class AnalysisAdapterTest(unittest.TestCase):
                     "currency": "USD",
                     "current_price": 298.01,
                     "market_cap": 4_376_979_046_400,
+                    "avg_volume_30d": 47_300_354,
+                    "shares_outstanding": 14_687_356_000,
                 },
                 "technicals": {
                     "data_provenance": {
@@ -75,6 +77,10 @@ class AnalysisAdapterTest(unittest.TestCase):
         self.assertIn("不构成投资建议", response["disclaimer"])
         self.assertGreaterEqual(len(response["key_points"]), 3)
         self.assertGreaterEqual(len(response["risks"]), 2)
+        self.assertTrue(response["sections"])
+        section_titles = [section["title"] for section in response["sections"]]
+        self.assertIn("公司概览", section_titles)
+        self.assertIn("估值与分析师", section_titles)
 
     def test_empty_payload_keeps_demo_response_compliant(self):
         response = build_research_response(

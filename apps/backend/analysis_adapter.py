@@ -59,6 +59,15 @@ def build_research_response(
                 "股票价格可能受宏观、行业、公司事件和市场情绪影响。",
             ],
             "disclaimer": DISCLAIMER,
+            "sections": [
+                {
+                    "title": "数据状态",
+                    "items": [
+                        {"label": "当前模式", "value": "示例响应"},
+                        {"label": "说明", "value": "未获取到实时数据，展示合规占位结果。"},
+                    ],
+                }
+            ],
         }
 
     summary = payloads.get("summary", {})
@@ -97,7 +106,143 @@ def build_research_response(
         "key_points": key_points,
         "risks": risks,
         "disclaimer": DISCLAIMER,
+        "sections": _build_sections(summary, technicals, fundamentals),
     }
+
+
+def _build_sections(
+    summary: dict[str, Any],
+    technicals: dict[str, Any],
+    fundamentals: dict[str, Any],
+) -> list[dict[str, Any]]:
+    valuation = fundamentals.get("valuation") or {}
+    growth = fundamentals.get("growth") or {}
+    profitability = fundamentals.get("profitability") or {}
+    health = fundamentals.get("financial_health") or {}
+    cash_flow = fundamentals.get("cash_flow") or {}
+    analyst = fundamentals.get("analyst_coverage") or {}
+    ma = technicals.get("moving_averages") or {}
+    rsi = technicals.get("rsi") or {}
+    macd = technicals.get("macd") or {}
+    returns = technicals.get("returns") or {}
+    volume = technicals.get("volume") or {}
+    price_position = technicals.get("price_position") or {}
+
+    sections = [
+        {
+            "title": "公司概览",
+            "items": [
+                _item("公司名称", summary.get("name")),
+                _item("股票代码", summary.get("symbol")),
+                _item("交易所", summary.get("exchange")),
+                _item("行业板块", summary.get("sector")),
+                _item("细分行业", summary.get("industry")),
+                _item("当前价格", _fmt_price(summary.get("current_price"), summary.get("currency"))),
+                _item("昨收价", _fmt_price(summary.get("previous_close"), summary.get("currency"))),
+                _item("市值", _fmt_large_number(summary.get("market_cap"))),
+                _item("30日均量", _fmt_large_number(summary.get("avg_volume_30d"))),
+                _item("总股本", _fmt_large_number(summary.get("shares_outstanding"))),
+                _item("股息率", _fmt_dividend_yield(summary.get("dividend_yield"))),
+            ],
+        },
+        {
+            "title": "估值与分析师",
+            "items": [
+                _item("滚动市盈率 PE", _fmt_number(valuation.get("pe_trailing"))),
+                _item("Forward PE", _fmt_number(valuation.get("pe_forward"))),
+                _item("每股收益 EPS", _fmt_number(valuation.get("trailing_eps"))),
+                _item("市销率 PS", _fmt_number(valuation.get("ps_trailing"))),
+                _item("市净率 PB", _fmt_number(valuation.get("pb_ratio"))),
+                _item("PEG", _fmt_number(valuation.get("peg_ratio"))),
+                _item("EV/EBITDA", _fmt_number(valuation.get("ev_to_ebitda"))),
+                _item("EV/Sales", _fmt_number(valuation.get("ev_to_sales"))),
+                _item("分析师评级", sanitize_recommendation_language(str(analyst.get("rating") or "未知"))),
+                _item("分析师数量", _fmt_number(analyst.get("num_analysts"))),
+                _item("平均目标价", _fmt_price(analyst.get("price_target_mean"), summary.get("currency"))),
+            ],
+        },
+        {
+            "title": "增长与盈利能力",
+            "items": [
+                _item("营收同比", _fmt_pct(growth.get("revenue_yoy"))),
+                _item("EPS同比", _fmt_pct(growth.get("eps_yoy"))),
+                _item("毛利率", _fmt_pct(profitability.get("gross_margin"))),
+                _item("经营利润率", _fmt_pct(profitability.get("operating_margin"))),
+                _item("净利率", _fmt_pct(profitability.get("net_margin"))),
+                _item("ROE", _fmt_pct(profitability.get("roe"))),
+                _item("ROA", _fmt_pct(profitability.get("roa"))),
+            ],
+        },
+        {
+            "title": "现金流与资产负债",
+            "items": [
+                _item("经营现金流 TTM", _fmt_large_number(cash_flow.get("operating_cf_ttm"))),
+                _item("自由现金流 TTM", _fmt_large_number(cash_flow.get("free_cash_flow_ttm"))),
+                _item("自由现金流率", _fmt_pct(cash_flow.get("fcf_margin"))),
+                _item("现金及等价物", _fmt_large_number(health.get("total_cash"))),
+                _item("总债务", _fmt_large_number(health.get("total_debt"))),
+                _item("净现金", _fmt_large_number(health.get("net_cash"))),
+                _item("流动比率", _fmt_number(health.get("current_ratio"))),
+                _item("债务/权益", _fmt_number(health.get("debt_to_equity"))),
+            ],
+        },
+        {
+            "title": "技术面",
+            "items": [
+                _item("50日均线", _fmt_price(ma.get("sma_50"), summary.get("currency"))),
+                _item("200日均线", _fmt_price(ma.get("sma_200"), summary.get("currency"))),
+                _item("价格相对50日均线", _fmt_pct(ma.get("price_vs_sma50"))),
+                _item("价格相对200日均线", _fmt_pct(ma.get("price_vs_sma200"))),
+                _item("RSI(14)", _fmt_number(rsi.get("value"))),
+                _item("MACD", _fmt_number(macd.get("macd_line"))),
+                _item("MACD Signal", _fmt_number(macd.get("signal_line"))),
+                _item("1个月收益", _fmt_pct(returns.get("return_1m"))),
+                _item("3个月收益", _fmt_pct(returns.get("return_3m"))),
+                _item("6个月收益", _fmt_pct(returns.get("return_6m"))),
+                _item("1年收益", _fmt_pct(returns.get("return_1y"))),
+                _item("52周高点", _fmt_price(price_position.get("week_52_high"), summary.get("currency"))),
+                _item("52周低点", _fmt_price(price_position.get("week_52_low"), summary.get("currency"))),
+                _item("距52周高点", _fmt_pct(price_position.get("from_52w_high"))),
+                _item("最新成交量", _fmt_large_number(volume.get("current"))),
+                _item("20日均量", _fmt_large_number(volume.get("avg_20d"))),
+            ],
+        },
+        {
+            "title": "数据来源",
+            "items": _provenance_items(summary, technicals, fundamentals),
+        },
+    ]
+    return [
+        {"title": section["title"], "items": [item for item in section["items"] if item["value"] != "未知"]}
+        for section in sections
+    ]
+
+
+def _item(label: str, value: Any) -> dict[str, str]:
+    value_text = str(value) if value not in (None, "") else "未知"
+    return {"label": label, "value": sanitize_recommendation_language(value_text)}
+
+
+def _provenance_items(*payloads: dict[str, Any]) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for payload in payloads:
+        provenance = payload.get("data_provenance")
+        if not isinstance(provenance, dict):
+            continue
+        for name, value in provenance.items():
+            if not isinstance(value, dict):
+                continue
+            source = str(value.get("source") or "未知")
+            as_of = str(value.get("as_of") or "未知")
+            key = (name, source)
+            if key in seen:
+                continue
+            seen.add(key)
+            warnings = value.get("warnings") or []
+            suffix = f"，提示：{', '.join(map(str, warnings))}" if warnings else ""
+            items.append(_item(name, f"{source}，时间 {as_of[:19]}{suffix}"))
+    return items or [_item("数据来源", "未知")]
 
 
 def _latest_as_of(*payloads: dict[str, Any]) -> str | None:
@@ -203,6 +348,15 @@ def _fmt_pct(value: Any) -> str:
     number = _to_float(value)
     if number is None:
         return "未知"
+    return f"{number * 100:.2f}%"
+
+
+def _fmt_dividend_yield(value: Any) -> str:
+    number = _to_float(value)
+    if number is None:
+        return "未知"
+    if number > 1:
+        return f"{number:.2f}%"
     return f"{number * 100:.2f}%"
 
 

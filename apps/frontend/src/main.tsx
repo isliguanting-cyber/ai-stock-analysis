@@ -9,10 +9,17 @@ type Analysis = {
   key_points: string[];
   risks: string[];
   disclaimer: string;
+  sections?: Array<{
+    title: string;
+    items: Array<{
+      label: string;
+      value: string;
+    }>;
+  }>;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-const REQUEST_TIMEOUT_MS = 20000;
+const REQUEST_TIMEOUT_MS = 60000;
 
 function App() {
   const [symbol, setSymbol] = useState("AAPL");
@@ -45,7 +52,7 @@ function App() {
       setAnalysis(await response.json());
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        setError("请求超时，请稍后重试。Render 免费实例冷启动或数据源波动时可能需要更久。");
+        setError("请求超时，请稍后重试。完整数据源偶尔会较慢，系统已避免无限等待。");
       } else {
         setError(err instanceof Error ? err.message : "请求失败，请稍后重试。");
       }
@@ -113,6 +120,24 @@ function App() {
                 </ul>
               </section>
             </div>
+
+            {analysis.sections?.length ? (
+              <div className="detailGrid">
+                {analysis.sections.map((section) => (
+                  <section className="detailSection" key={section.title}>
+                    <h3>{section.title}</h3>
+                    <dl>
+                      {section.items.map((item) => (
+                        <div className="metric" key={`${section.title}-${item.label}`}>
+                          <dt>{item.label}</dt>
+                          <dd>{item.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
+                ))}
+              </div>
+            ) : null}
 
             <p className="disclaimer">{analysis.disclaimer}</p>
           </section>
