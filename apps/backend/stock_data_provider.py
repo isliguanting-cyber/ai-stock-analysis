@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import datetime
+from functools import lru_cache
 import logging
 import os
 from typing import Any
@@ -61,10 +62,26 @@ def _fetch_from_yfinance(symbol: str) -> dict[str, dict[str, Any]] | None:
     )
     merged_info = _merge_info(normalized, info, fast_info, profile, current_price)
 
+    fundamentals = _build_fundamentals(normalized, merged_info, as_of, warnings)
+    sec_fundamentals, sec_warning = _fetch_sec_fundamentals(
+        normalized,
+        current_price=current_price,
+        shares_outstanding=_to_float(merged_info.get("sharesOutstanding")),
+    )
+    if sec_fundamentals:
+        summary_overrides = sec_fundamentals.pop("summary_overrides", {}) or {}
+        if summary_overrides.get("shares_outstanding") is not None:
+            merged_info["sharesOutstanding"] = summary_overrides["shares_outstanding"]
+        if summary_overrides.get("market_cap") is not None:
+            merged_info["marketCap"] = summary_overrides["market_cap"]
+        fundamentals = _merge_fundamentals(fundamentals, sec_fundamentals)
+    if sec_warning:
+        warnings.append(sec_warning)
+
     return {
         "summary": _build_summary(normalized, merged_info, current_price, as_of, warnings),
         "technicals": _build_technicals(normalized, history, current_price, as_of, pd, warnings),
-        "fundamentals": _build_fundamentals(normalized, merged_info, as_of, warnings),
+        "fundamentals": fundamentals,
     }
 
 
@@ -148,6 +165,222 @@ def _fetch_from_yahoo_chart(symbol: str) -> dict[str, dict[str, Any]] | None:
             source="yahoo_finance_chart",
         ),
     }
+
+
+def _fetch_sec_fundamentals(
+    symbol: str,
+    *,
+    current_price: float | None,
+    shares_outstanding: float | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        import requests
+    except ImportError:
+        return None, "sec_unavailable"
+
+    try:
+        cik = _sec_cik_for_symbol(symbol)
+        if not cik:
+            return None, "sec_cik_not_found"
+        response = requests.get(
+            f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+            headers=_sec_headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        all_facts = payload.get("facts") or {}
+        facts = all_facts.get("us-gaap") or {}
+        dei_facts = all_facts.get("dei") or {}
+    except Exception as exc:
+        logger.warning("SEC fundamentals fetch failed for %s: %s", symbol, exc)
+        return None, "sec_unavailable"
+
+    revenue_latest, revenue_previous = _latest_annual_values(
+        facts,
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "Revenues",
+        "SalesRevenueNet",
+    )
+    net_income, _ = _latest_annual_values(facts, "NetIncomeLoss")
+    operating_cf, _ = _latest_annual_values(facts, "NetCashProvidedByUsedInOperatingActivities")
+    capex, _ = _latest_annual_values(facts, "PaymentsToAcquirePropertyPlantAndEquipment")
+    assets = _latest_instant_value(facts, "Assets")
+    liabilities = _latest_instant_value(facts, "Liabilities")
+    equity = _latest_instant_value(facts, "StockholdersEquity")
+    cash = _latest_instant_value(
+        facts,
+        "CashAndCashEquivalentsAtCarryingValue",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+    )
+    debt = _latest_instant_value(
+        facts,
+        "ShortTermBorrowings",
+        "ShortTermDebt",
+        "LongTermDebtCurrent",
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndFinanceLeaseObligationsCurrent",
+        "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
+    )
+    if debt is None:
+        debt = _latest_instant_value(facts, "LongTermDebtAndFinanceLeaseObligations")
+
+    sec_shares = _latest_share_value(dei_facts, facts)
+    resolved_shares = shares_outstanding or sec_shares
+    market_cap = (
+        current_price * resolved_shares
+        if current_price is not None and resolved_shares is not None
+        else None
+    )
+    free_cash_flow = (
+        operating_cf - abs(capex)
+        if operating_cf is not None and capex is not None
+        else None
+    )
+
+    return {
+        "data_provenance": {
+            "fundamentals": {
+                "source": "sec_companyfacts",
+                "as_of": datetime.utcnow().isoformat() + "Z",
+                "warnings": [],
+            }
+        },
+        "valuation": {
+            "pe_trailing": _ratio(market_cap, net_income),
+            "trailing_eps": _ratio(net_income, resolved_shares),
+            "ps_trailing": _ratio(market_cap, revenue_latest),
+            "pb_ratio": _ratio(market_cap, equity),
+        },
+        "growth": {
+            "revenue_yoy": _ratio_delta(revenue_latest, revenue_previous),
+        },
+        "profitability": {
+            "net_margin": _ratio(net_income, revenue_latest),
+            "roa": _ratio(net_income, assets),
+            "roe": _ratio(net_income, equity),
+        },
+        "financial_health": {
+            "total_cash": cash,
+            "total_debt": debt,
+            "net_cash": cash - debt if cash is not None and debt is not None else None,
+            "debt_to_equity": _ratio(debt, equity),
+        },
+        "cash_flow": {
+            "operating_cf_ttm": operating_cf,
+            "free_cash_flow_ttm": free_cash_flow,
+            "fcf_margin": _ratio(free_cash_flow, revenue_latest),
+        },
+        "summary_overrides": {
+            "shares_outstanding": resolved_shares,
+            "market_cap": market_cap,
+        },
+    }, None
+
+
+@lru_cache(maxsize=1)
+def _sec_company_tickers() -> dict[str, str]:
+    import requests
+
+    response = requests.get(
+        "https://www.sec.gov/files/company_tickers.json",
+        headers=_sec_headers(),
+        timeout=20,
+    )
+    response.raise_for_status()
+    rows = response.json().values()
+    return {
+        str(row.get("ticker", "")).upper(): str(row.get("cik_str", "")).zfill(10)
+        for row in rows
+        if row.get("ticker") and row.get("cik_str")
+    }
+
+
+def _sec_cik_for_symbol(symbol: str) -> str | None:
+    return _sec_company_tickers().get(symbol.upper())
+
+
+def _sec_headers() -> dict[str, str]:
+    return {
+        "User-Agent": os.getenv(
+            "SEC_USER_AGENT",
+            "ai-stock-analysis research app contact@example.com",
+        )
+    }
+
+
+def _latest_annual_values(facts: dict[str, Any], *concepts: str) -> tuple[float | None, float | None]:
+    entries: list[dict[str, Any]] = []
+    for concept in concepts:
+        units = ((facts.get(concept) or {}).get("units") or {})
+        entries.extend(units.get("USD") or [])
+    annuals = [
+        item
+        for item in entries
+        if item.get("form") == "10-K" and item.get("fy") and item.get("val") is not None
+    ]
+    annuals.sort(key=lambda item: (item.get("fy") or 0, item.get("end") or ""), reverse=True)
+    values = [_to_float(item.get("val")) for item in annuals]
+    values = [value for value in values if value is not None]
+    latest = values[0] if values else None
+    previous = values[1] if len(values) > 1 else None
+    return latest, previous
+
+
+def _latest_instant_value(facts: dict[str, Any], *concepts: str) -> float | None:
+    entries: list[dict[str, Any]] = []
+    for concept in concepts:
+        units = ((facts.get(concept) or {}).get("units") or {})
+        entries.extend(units.get("USD") or [])
+    instants = [
+        item
+        for item in entries
+        if item.get("form") in {"10-K", "10-Q"} and item.get("val") is not None
+    ]
+    instants.sort(key=lambda item: item.get("end") or "", reverse=True)
+    return _to_float(instants[0].get("val")) if instants else None
+
+
+def _latest_share_value(dei_facts: dict[str, Any], gaap_facts: dict[str, Any]) -> float | None:
+    entries: list[dict[str, Any]] = []
+    for facts, concept in (
+        (dei_facts, "EntityCommonStockSharesOutstanding"),
+        (gaap_facts, "CommonStocksIncludingAdditionalPaidInCapital"),
+    ):
+        units = ((facts.get(concept) or {}).get("units") or {})
+        entries.extend(units.get("shares") or [])
+    instants = [
+        item
+        for item in entries
+        if item.get("val") is not None and item.get("end")
+    ]
+    instants.sort(key=lambda item: item.get("end") or "", reverse=True)
+    return _to_float(instants[0].get("val")) if instants else None
+
+
+def _merge_fundamentals(base: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for section, values in fallback.items():
+        if section == "data_provenance":
+            if _section_has_missing_values(base):
+                merged[section] = values
+            continue
+        if not isinstance(values, dict):
+            continue
+        current = dict(merged.get(section) or {})
+        for key, value in values.items():
+            if current.get(key) is None and value is not None:
+                current[key] = value
+        merged[section] = current
+    return merged
+
+
+def _section_has_missing_values(payload: dict[str, Any]) -> bool:
+    for section in ("valuation", "growth", "profitability", "financial_health", "cash_flow"):
+        values = payload.get(section) or {}
+        if any(value is None for value in values.values()):
+            return True
+    return False
 
 
 def _safe_fast_info(ticker: Any) -> tuple[dict[str, Any], str | None]:
